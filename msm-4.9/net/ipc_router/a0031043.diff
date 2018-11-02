@@ -1,0 +1,107 @@
+From a00310433b3610cbadb35fbe372a6013d16c548d Mon Sep 17 00:00:00 2001
+From: Hank2 Liu (劉磊_華碩蘇州) <Hank2_Liu@asus.com>
+Date: Tue, 23 Oct 2018 15:13:30 +0800
+Subject: [PATCH] Revert "[PATCH] net: ipc_router: Remove wakeup-source for Sensor ports"
+
+This reverts commit 622973e1b2be870d31261aaeb111aa827e8fc42e.
+
+Change-Id: Ib58013bdbed8bc9e7496af4fb8106ecb9807d181
+---
+
+diff --git a/net/ipc_router/ipc_router_core.c b/net/ipc_router/ipc_router_core.c
+index e57bf5e..d38157d 100644
+--- a/net/ipc_router/ipc_router_core.c
++++ b/net/ipc_router/ipc_router_core.c
+@@ -223,25 +223,6 @@
+ 	is_wakeup_source_allowed = flag;
+ }
+ 
+-/**
+- * is_sensor_port() - Check if the remote port is sensor service or not
+- * @rport: Pointer to the remote port.
+- *
+- * Return: true if the remote port is sensor service else false.
+- */
+-static int is_sensor_port(struct msm_ipc_router_remote_port *rport)
+-{
+-	u32 svcid = 0;
+-
+-	if (rport && rport->server) {
+-		svcid = rport->server->name.service;
+-		if (svcid == 400 || (svcid >= 256 && svcid <= 320))
+-			return true;
+-	}
+-
+-	return false;
+-}
+-
+ static void init_routing_table(void)
+ {
+ 	int i;
+@@ -2747,6 +2728,7 @@
+ 	struct rr_packet *pkt = NULL;
+ 	struct msm_ipc_port *port_ptr;
+ 	struct msm_ipc_router_remote_port *rport_ptr;
++	int ret;
+ 
+ 	struct msm_ipc_router_xprt_info *xprt_info =
+ 		container_of(work,
+@@ -2754,6 +2736,16 @@
+ 			     read_data);
+ 
+ 	while ((pkt = rr_read(xprt_info)) != NULL) {
++		if (pkt->length < calc_rx_header_size(xprt_info) ||
++		    pkt->length > MAX_IPC_PKT_SIZE) {
++			IPC_RTR_ERR("%s: Invalid pkt length %d\n", __func__,
++				    pkt->length);
++			goto read_next_pkt1;
++		}
++
++		ret = extract_header(pkt);
++		if (ret < 0)
++			goto read_next_pkt1;
+ 		hdr = &pkt->hdr;
+ 
+ 		if ((hdr->dst_node_id != IPC_ROUTER_NID_LOCAL) &&
+@@ -4180,7 +4172,6 @@
+ {
+ 	struct msm_ipc_router_xprt_info *xprt_info = xprt->priv;
+ 	struct msm_ipc_router_xprt_work *xprt_work;
+-	struct msm_ipc_router_remote_port *rport_ptr = NULL;
+ 	struct rr_packet *pkt;
+ 	int ret;
+ 
+@@ -4231,32 +4222,10 @@
+ 	if (!pkt)
+ 		return;
+ 
+-	if (pkt->length < calc_rx_header_size(xprt_info) ||
+-	    pkt->length > MAX_IPC_PKT_SIZE) {
+-		IPC_RTR_ERR("%s: Invalid pkt length %d\n",
+-			    __func__, pkt->length);
+-		release_pkt(pkt);
+-		return;
+-	}
+-
+-	ret = extract_header(pkt);
+-	if (ret < 0) {
+-		release_pkt(pkt);
+-		return;
+-	}
+-
+ 	pkt->ws_need = false;
+-
+-	if (pkt->hdr.type == IPC_ROUTER_CTRL_CMD_DATA)
+-		rport_ptr = ipc_router_get_rport_ref(pkt->hdr.src_node_id,
+-						     pkt->hdr.src_port_id);
+-
+ 	mutex_lock(&xprt_info->rx_lock_lhb2);
+ 	list_add_tail(&pkt->list, &xprt_info->pkt_list);
+-	/* check every pkt is from SENSOR services or not*/
+-	if (is_sensor_port(rport_ptr)) {
+-		pkt->ws_need = false;
+-	} else if (!xprt_info->dynamic_ws) {
++	if (!xprt_info->dynamic_ws) {
+ 		__pm_stay_awake(&xprt_info->ws);
+ 		pkt->ws_need = true;
+ 	} else {
